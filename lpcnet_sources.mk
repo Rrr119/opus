@@ -28,7 +28,11 @@ dnn/dred_decoder.c
 OSCE_SOURCES = \
 dnn/osce.c \
 dnn/osce_features.c \
-dnn/nndsp.c \
+dnn/nndsp.c
+
+TINYLACE_SOURCES = dnn/tinylace_data.c
+
+OSCE_FULL_SOURCES = \
 dnn/lace_data.c \
 dnn/nolace_data.c \
 dnn/bbwenet_data.c

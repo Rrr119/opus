@@ -47,8 +47,17 @@
 #include "dred_rdovae_enc_data.c"
 #include "dred_rdovae_dec_data.c"
 #ifdef ENABLE_OSCE
+#ifndef DISABLE_LACE
 #include "lace_data.c"
+#endif
+#ifndef DISABLE_NOLACE
 #include "nolace_data.c"
+#endif
+#ifdef ENABLE_OSCE_BWE
+#ifndef DISABLE_BBWENET
+#include "bbwenet_data.c"
+#endif
+#endif
 #endif
 
 void write_weights(const WeightArray *list, FILE *fout)
@@ -90,6 +99,11 @@ int main(void)
 #endif
 #ifndef DISABLE_NOLACE
   write_weights(nolacelayers_arrays, fout);
+#endif
+#ifdef ENABLE_OSCE_BWE
+#ifndef DISABLE_BBWENET
+  write_weights(bbwenetlayers_arrays, fout);
+#endif
 #endif
 #endif
   fclose(fout);

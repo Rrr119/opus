@@ -112,44 +112,79 @@ static void print_linear_layer(FILE *fid, const char *name, LinearLayer *layer)
 #define CLIP(a, min, max) (((a) < (min) ? (min) : (a)) > (max) ? (max) : (a))
 
 extern const WeightArray lacelayers_arrays[];
+extern const WeightArray tinylacelayers_arrays[];
 extern const WeightArray nolacelayers_arrays[];
 extern const WeightArray bbwenetlayers_arrays[];
 
 /* LACE */
 
-#ifndef DISABLE_LACE
+#if !defined(DISABLE_LACE) || !defined(DISABLE_TINYLACE)
 
-static void compute_lace_numbits_embedding(float *emb, float numbits, int dim, float min_val, float max_val, int logscale)
+static void compute_lace_numbits_embedding(float *emb, float numbits, int dim, float min_val, float max_val, int logscale, const float *scale)
 {
     float x;
-    (void) dim;
+    int i;
 
     numbits = logscale ? log(numbits) : numbits;
     x = CLIP(numbits, min_val, max_val) - (max_val + min_val) / 2;
 
-    emb[0] = sin(x * LACE_NUMBITS_SCALE_0 - 0.5f);
-    emb[1] = sin(x * LACE_NUMBITS_SCALE_1 - 0.5f);
-    emb[2] = sin(x * LACE_NUMBITS_SCALE_2 - 0.5f);
-    emb[3] = sin(x * LACE_NUMBITS_SCALE_3 - 0.5f);
-    emb[4] = sin(x * LACE_NUMBITS_SCALE_4 - 0.5f);
-    emb[5] = sin(x * LACE_NUMBITS_SCALE_5 - 0.5f);
-    emb[6] = sin(x * LACE_NUMBITS_SCALE_6 - 0.5f);
-    emb[7] = sin(x * LACE_NUMBITS_SCALE_7 - 0.5f);
+    for (i = 0; i < dim; i++)
+        emb[i] = sin(x * scale[i] - 0.5f);
 }
 
 
+#ifndef DISABLE_LACE
 static int init_lace(LACE *hLACE, const WeightArray *weights)
 {
     int ret = 0;
+    static const float scale[8] = {
+        LACE_NUMBITS_SCALE_0, LACE_NUMBITS_SCALE_1, LACE_NUMBITS_SCALE_2, LACE_NUMBITS_SCALE_3,
+        LACE_NUMBITS_SCALE_4, LACE_NUMBITS_SCALE_5, LACE_NUMBITS_SCALE_6, LACE_NUMBITS_SCALE_7
+    };
     OPUS_CLEAR(hLACE, 1);
     celt_assert(weights != NULL);
 
     ret = init_lacelayers(&hLACE->layers, weights);
 
+    OPUS_COPY(hLACE->numbits_scale, scale, 8);
     compute_overlap_window(hLACE->window, LACE_OVERLAP_SIZE);
 
     return ret;
 }
+
+#endif
+
+#ifndef DISABLE_TINYLACE
+static int init_tinylace(LACE *hLACE)
+{
+    int ret;
+    TINYLACELayers layers;
+    static const float scale[8] = {
+        TINYLACE_NUMBITS_SCALE_0, TINYLACE_NUMBITS_SCALE_1, TINYLACE_NUMBITS_SCALE_2, TINYLACE_NUMBITS_SCALE_3,
+        TINYLACE_NUMBITS_SCALE_4, TINYLACE_NUMBITS_SCALE_5, TINYLACE_NUMBITS_SCALE_6, TINYLACE_NUMBITS_SCALE_7
+    };
+    OPUS_CLEAR(hLACE, 1);
+    ret = init_tinylacelayers(&layers, tinylacelayers_arrays);
+    if (ret) return ret;
+    hLACE->layers.lace_pitch_embedding = layers.lace_pitch_embedding;
+    hLACE->layers.lace_fnet_conv1 = layers.lace_fnet_conv1;
+    hLACE->layers.lace_fnet_conv2 = layers.lace_fnet_conv2;
+    hLACE->layers.lace_fnet_tconv = layers.lace_fnet_tconv;
+    hLACE->layers.lace_fnet_gru_input = layers.lace_fnet_gru_input;
+    hLACE->layers.lace_fnet_gru_recurrent = layers.lace_fnet_gru_recurrent;
+    hLACE->layers.lace_cf1_kernel = layers.lace_cf1_kernel;
+    hLACE->layers.lace_cf1_gain = layers.lace_cf1_gain;
+    hLACE->layers.lace_cf1_global_gain = layers.lace_cf1_global_gain;
+    hLACE->layers.lace_cf2_kernel = layers.lace_cf2_kernel;
+    hLACE->layers.lace_cf2_gain = layers.lace_cf2_gain;
+    hLACE->layers.lace_cf2_global_gain = layers.lace_cf2_global_gain;
+    hLACE->layers.lace_af1_kernel = layers.lace_af1_kernel;
+    hLACE->layers.lace_af1_gain = layers.lace_af1_gain;
+    OPUS_COPY(hLACE->numbits_scale, scale, 8);
+    compute_overlap_window(hLACE->window, LACE_OVERLAP_SIZE);
+    return 0;
+}
+#endif
 
 static void reset_lace_state(LACEState *state)
 {
@@ -174,43 +209,46 @@ static void lace_feature_net(
     float output_buffer[4 * IMAX(LACE_COND_DIM, LACE_HIDDEN_FEATURE_DIM)];
     float numbits_embedded[2 * LACE_NUMBITS_EMBEDDING_DIM];
     int i_subframe;
+    int cond_dim = hLACE->layers.lace_fnet_conv2.nb_outputs;
+    int hidden_dim = hLACE->layers.lace_fnet_conv1.nb_outputs;
+    int pitch_embedding_dim = hLACE->layers.lace_fnet_conv1.nb_inputs - LACE_NUM_FEATURES - 2 * LACE_NUMBITS_EMBEDDING_DIM;
 
     compute_lace_numbits_embedding(numbits_embedded, numbits[0], LACE_NUMBITS_EMBEDDING_DIM,
-        log(LACE_NUMBITS_RANGE_LOW), log(LACE_NUMBITS_RANGE_HIGH), 1);
+        log(LACE_NUMBITS_RANGE_LOW), log(LACE_NUMBITS_RANGE_HIGH), 1, hLACE->numbits_scale);
     compute_lace_numbits_embedding(numbits_embedded + LACE_NUMBITS_EMBEDDING_DIM, numbits[1], LACE_NUMBITS_EMBEDDING_DIM,
-        log(LACE_NUMBITS_RANGE_LOW), log(LACE_NUMBITS_RANGE_HIGH), 1);
+        log(LACE_NUMBITS_RANGE_LOW), log(LACE_NUMBITS_RANGE_HIGH), 1, hLACE->numbits_scale);
 
     /* scaling and dimensionality reduction */
     for (i_subframe = 0; i_subframe < 4; i_subframe ++)
     {
         OPUS_COPY(input_buffer, features + i_subframe * LACE_NUM_FEATURES, LACE_NUM_FEATURES);
-        OPUS_COPY(input_buffer + LACE_NUM_FEATURES, hLACE->layers.lace_pitch_embedding.float_weights + periods[i_subframe] * LACE_PITCH_EMBEDDING_DIM, LACE_PITCH_EMBEDDING_DIM);
-        OPUS_COPY(input_buffer + LACE_NUM_FEATURES + LACE_PITCH_EMBEDDING_DIM, numbits_embedded, 2 * LACE_NUMBITS_EMBEDDING_DIM);
+        OPUS_COPY(input_buffer + LACE_NUM_FEATURES, hLACE->layers.lace_pitch_embedding.float_weights + periods[i_subframe] * pitch_embedding_dim, pitch_embedding_dim);
+        OPUS_COPY(input_buffer + LACE_NUM_FEATURES + pitch_embedding_dim, numbits_embedded, 2 * LACE_NUMBITS_EMBEDDING_DIM);
 
         compute_generic_conv1d(
             &hLACE->layers.lace_fnet_conv1,
-            output_buffer + i_subframe * LACE_HIDDEN_FEATURE_DIM,
+            output_buffer + i_subframe * hidden_dim,
             NULL,
             input_buffer,
-            LACE_NUM_FEATURES + LACE_PITCH_EMBEDDING_DIM + 2 * LACE_NUMBITS_EMBEDDING_DIM,
+            LACE_NUM_FEATURES + pitch_embedding_dim + 2 * LACE_NUMBITS_EMBEDDING_DIM,
             ACTIVATION_TANH,
             arch);
     }
 
     /* subframe accumulation */
-    OPUS_COPY(input_buffer, output_buffer, 4 * LACE_HIDDEN_FEATURE_DIM);
+    OPUS_COPY(input_buffer, output_buffer, 4 * hidden_dim);
     compute_generic_conv1d(
         &hLACE->layers.lace_fnet_conv2,
         output_buffer,
         state->feature_net_conv2_state,
         input_buffer,
-        4 * LACE_HIDDEN_FEATURE_DIM,
+        4 * hidden_dim,
         ACTIVATION_TANH,
         arch
     );
 
     /* tconv upsampling */
-    OPUS_COPY(input_buffer, output_buffer, 4 * LACE_COND_DIM);
+    OPUS_COPY(input_buffer, output_buffer, 4 * cond_dim);
     compute_generic_dense(
         &hLACE->layers.lace_fnet_tconv,
         output_buffer,
@@ -220,17 +258,17 @@ static void lace_feature_net(
     );
 
     /* GRU */
-    OPUS_COPY(input_buffer, output_buffer, 4 * LACE_COND_DIM);
+    OPUS_COPY(input_buffer, output_buffer, 4 * cond_dim);
     for (i_subframe = 0; i_subframe < 4; i_subframe++)
     {
         compute_generic_gru(
             &hLACE->layers.lace_fnet_gru_input,
             &hLACE->layers.lace_fnet_gru_recurrent,
             state->feature_net_gru_state,
-            input_buffer + i_subframe * LACE_COND_DIM,
+            input_buffer + i_subframe * cond_dim,
             arch
         );
-        OPUS_COPY(output + i_subframe * LACE_COND_DIM, state->feature_net_gru_state, LACE_COND_DIM);
+        OPUS_COPY(output + i_subframe * cond_dim, state->feature_net_gru_state, cond_dim);
     }
 }
 
@@ -249,6 +287,7 @@ static void lace_process_20ms_frame(
     float feature_buffer[4 * LACE_COND_DIM];
     float output_buffer[4 * LACE_FRAME_SIZE];
     int i_subframe, i_sample;
+    int cond_dim = hLACE->layers.lace_fnet_conv2.nb_outputs;
 
 #ifdef DEBUG_LACE
     static FILE *f_features=NULL, *f_encfeatures=NULL, *f_xin=NULL, *f_xpreemph=NULL, *f_postcf1=NULL;
@@ -282,7 +321,7 @@ static void lace_process_20ms_frame(
     lace_feature_net(hLACE, state, feature_buffer, features, numbits, periods, arch);
 #ifdef DEBUG_LACE
     fwrite(features, sizeof(*features), 4 * LACE_NUM_FEATURES, f_features);
-    fwrite(feature_buffer, sizeof(*feature_buffer), 4 * LACE_COND_DIM, f_encfeatures);
+    fwrite(feature_buffer, sizeof(*feature_buffer), 4 * cond_dim, f_encfeatures);
     fwrite(output_buffer, sizeof(float), 4 * LACE_FRAME_SIZE, f_xpreemph);
 #endif
 
@@ -293,12 +332,12 @@ static void lace_process_20ms_frame(
             &state->cf1_state,
             output_buffer + i_subframe * LACE_FRAME_SIZE,
             output_buffer + i_subframe * LACE_FRAME_SIZE,
-            feature_buffer + i_subframe * LACE_COND_DIM,
+            feature_buffer + i_subframe * cond_dim,
             &hLACE->layers.lace_cf1_kernel,
             &hLACE->layers.lace_cf1_gain,
             &hLACE->layers.lace_cf1_global_gain,
             periods[i_subframe],
-            LACE_COND_DIM,
+            cond_dim,
             LACE_FRAME_SIZE,
             LACE_OVERLAP_SIZE,
             LACE_CF1_KERNEL_SIZE,
@@ -321,12 +360,12 @@ static void lace_process_20ms_frame(
             &state->cf2_state,
             output_buffer + i_subframe * LACE_FRAME_SIZE,
             output_buffer + i_subframe * LACE_FRAME_SIZE,
-            feature_buffer + i_subframe * LACE_COND_DIM,
+            feature_buffer + i_subframe * cond_dim,
             &hLACE->layers.lace_cf2_kernel,
             &hLACE->layers.lace_cf2_gain,
             &hLACE->layers.lace_cf2_global_gain,
             periods[i_subframe],
-            LACE_COND_DIM,
+            cond_dim,
             LACE_FRAME_SIZE,
             LACE_OVERLAP_SIZE,
             LACE_CF2_KERNEL_SIZE,
@@ -348,10 +387,10 @@ static void lace_process_20ms_frame(
             &state->af1_state,
             output_buffer + i_subframe * LACE_FRAME_SIZE,
             output_buffer + i_subframe * LACE_FRAME_SIZE,
-            feature_buffer + i_subframe * LACE_COND_DIM,
+            feature_buffer + i_subframe * cond_dim,
             &hLACE->layers.lace_af1_kernel,
             &hLACE->layers.lace_af1_gain,
-            LACE_COND_DIM,
+            cond_dim,
             LACE_FRAME_SIZE,
             LACE_OVERLAP_SIZE,
             LACE_AF1_IN_CHANNELS,
@@ -379,7 +418,7 @@ static void lace_process_20ms_frame(
 #endif
 }
 
-#endif /* #ifndef DISABLE_LACE */
+#endif
 
 
 /* NoLACE */
@@ -1388,8 +1427,13 @@ void osce_reset(silk_OSCE_struct *hOSCE, int method)
     {
         case OSCE_METHOD_NONE:
             break;
+#if !defined(DISABLE_LACE) || !defined(DISABLE_TINYLACE)
 #ifndef DISABLE_LACE
         case OSCE_METHOD_LACE:
+#endif
+#ifndef DISABLE_TINYLACE
+        case OSCE_METHOD_TINYLACE:
+#endif
             reset_lace_state(&state->lace);
             break;
 #endif
@@ -1430,6 +1474,11 @@ int osce_load_models(OSCEModel *model, const void *data, int len)
     int ret = 0;
     WeightArray *list;
 
+#ifndef DISABLE_TINYLACE
+    model->tinylace_loaded = init_tinylace(&model->tinylace) == 0;
+    if (!model->tinylace_loaded) return -1;
+#endif
+
     if (data != NULL  && len)
     {
         /* init from buffer */
@@ -1452,7 +1501,9 @@ int osce_load_models(OSCEModel *model, const void *data, int len)
     } else
     {
 #ifdef USE_WEIGHTS_FILE
+#if !defined(DISABLE_LACE) || !defined(DISABLE_NOLACE) || !defined(DISABLE_BBWENET)
         return -1;
+#endif
 #else
 #ifndef DISABLE_LACE
         if (ret == 0) {ret = init_lace(&model->lace, lacelayers_arrays);}
@@ -1579,6 +1630,10 @@ void osce_enhance_frame(
         method = psDec->osce.method;
     else
         method = OSCE_METHOD_NONE;
+#ifndef DISABLE_TINYLACE
+    if (model->tinylace_loaded && psDec->osce.method == OSCE_METHOD_TINYLACE)
+        method = OSCE_METHOD_TINYLACE;
+#endif
     switch(method)
     {
         case OSCE_METHOD_NONE:
@@ -1587,6 +1642,11 @@ void osce_enhance_frame(
 #ifndef DISABLE_LACE
         case OSCE_METHOD_LACE:
             lace_process_20ms_frame(&model->lace, &psDec->osce.state.lace, out_buffer, in_buffer, features, numbits, periods, arch);
+            break;
+#endif
+#ifndef DISABLE_TINYLACE
+        case OSCE_METHOD_TINYLACE:
+            lace_process_20ms_frame(&model->tinylace, &psDec->osce.state.lace, out_buffer, in_buffer, features, numbits, periods, arch);
             break;
 #endif
 #ifndef DISABLE_NOLACE

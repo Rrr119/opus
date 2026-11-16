@@ -68,12 +68,14 @@ static const int center_bins_noisy[18] = {
     136,    160
 };
 
+#ifdef ENABLE_OSCE_BWE
 static const int center_bins_bwe[32] = {
       0,   5,  10,  15,  20,  25,  30,  35,
      40,  45,  50,  55,  60,  65,  70,  75,
      80,  85,  90,  95, 100, 105, 110, 115,
     120, 125, 130, 135, 140, 145, 150, 160
 };
+#endif
 
 static const float band_weights_clean[64] = {
      0.666666666667f,     0.400000000000f,     0.333333333333f,     0.400000000000f,
@@ -102,6 +104,7 @@ static const float band_weights_noisy[18] = {
      0.041666666667f,     0.080000000000f
 };
 
+#ifdef ENABLE_OSCE_BWE
 static const float band_weights_bwe[32] = {
     0.333333333, 0.200000000, 0.200000000, 0.200000000,
     0.200000000, 0.200000000, 0.200000000, 0.200000000,
@@ -112,6 +115,7 @@ static const float band_weights_bwe[32] = {
     0.200000000, 0.200000000, 0.200000000, 0.200000000,
     0.200000000, 0.200000000, 0.133333333, 0.181818182
 };
+#endif
 
 static float osce_window[OSCE_SPEC_WINDOW_SIZE] = {
      0.004908718808f,     0.014725683311f,     0.024541228523f,     0.034354408400f,     0.044164277127f,
