@@ -145,6 +145,37 @@ extern "C" {
   * to the mapping the encoder used to achieve a different output channel
   * order (e.g. for outputting in WAV order).
   *
+  * The channel mapping itself is identified by a <dfn>mapping family</dfn>.
+  * The convenience functions
+  * opus_multistream_surround_encoder_create() and
+  * opus_multistream_surround_encoder_init() select a layout automatically:
+  * <dl>
+  * <dt>Family 0</dt>
+  * <dd>One or two channels using the Vorbis order (mono or stereo).</dd>
+  * <dt>Family 1</dt>
+  * <dd>Vorbis channel order for one to eight channels. This covers the
+  * common surround layouts, including 5.1 (six channels: front left/right,
+  * center, LFE, surround left/right) and 7.1 (eight channels).</dd>
+  * <dt>Family 2</dt>
+  * <dd>Ambisonic coding, as defined by
+  * <a href="https://tools.ietf.org/html/rfc8486">RFC 8486</a>. The input
+  * channels are Ambisonic components in Ambisonic Channel Number (ACN) order.
+  * For an ambisonic order <code>n</code> the bed contains
+  * <code>(n+1)^2</code> channels; it may be followed by an optional
+  * two-channel non-diegetic stereo pair. The valid channel counts are
+  * therefore any perfect square up to 225, or such a square plus two (up to
+  * 227). Each ACN component is coded as an independent uncoupled mono
+  * stream, while the non-diegetic pair, when present, is coded as one
+  * coupled stream preceding the uncoupled streams.</dd>
+  * <dt>Family 255</dt>
+  * <dd>Undefined order: each channel is mapped to its own uncoupled mono
+  * stream.</dd>
+  * </dl>
+  * Families other than 0, 1, 2, and 255 are not supported by the
+  * convenience functions and result in #OPUS_UNIMPLEMENTED; applications may
+  * still build arbitrary layouts explicitly with
+  * opus_multistream_encoder_create() and a hand-provided mapping table.
+  *
   * Each multistream packet contains an Opus packet for each stream, and all of
   * the Opus packets in a single multistream packet must have the same
   * duration. Therefore the duration of a multistream packet can be extracted
@@ -205,6 +236,27 @@ OPUS_EXPORT OPUS_WARN_UNUSED_RESULT opus_int32 opus_multistream_encoder_get_size
       int coupled_streams
 );
 
+/** Gets the size of an OpusMSEncoder structure for a layout selected by
+  * channel count and mapping family, as used by
+  * opus_multistream_surround_encoder_init().
+  * @param channels <tt>int</tt>: Number of channels in the input signal.
+  * @param mapping_family <tt>int</tt>: The mapping family, which selects the
+  *                                      stream layout:
+  * <dl>
+  * <dt>0</dt><dd>Monophonic (1 channel) or stereophonic (2 channels)
+  * Vorbis order.</dd>
+  * <dt>1</dt><dd>Vorbis channel order, supporting 1 to 8 channels including
+  * 5.1 (6 channels) and 7.1 (8 channels).</dd>
+  * <dt>2</dt><dd>Ambisonic order. The number of Ambisonic channels must be a
+  * perfect square <code>(order+1)^2</code>, optionally followed by a
+  * two-channel non-diegetic stereo pair, for a total between 1 and 227
+  * channels.</dd>
+  * <dt>255</dt><dd>Undefined order: one independent, uncoupled stream per
+  * channel.</dd>
+  * </dl>
+  * @returns The size in bytes on success, or 0 if the combination of
+  *          \a channels and \a mapping_family is not supported.
+  */
 OPUS_EXPORT OPUS_WARN_UNUSED_RESULT opus_int32 opus_multistream_surround_encoder_get_size(
       int channels,
       int mapping_family
@@ -264,6 +316,47 @@ OPUS_EXPORT OPUS_WARN_UNUSED_RESULT OpusMSEncoder *opus_multistream_encoder_crea
       int *error
 ) OPUS_ARG_NONNULL(5);
 
+/** Allocates and initializes a multistream encoder state whose stream
+  * layout (number of streams, coupled streams, and channel mapping) is
+  * derived from a channel count and mapping family.
+  * Call opus_multistream_encoder_destroy() to release this object when
+  * finished.
+  * This is a convenience wrapper around
+  * opus_multistream_encoder_create(): the values written to \a streams,
+  * \a coupled_streams and \a mapping can be passed unchanged to
+  * opus_multistream_decoder_create() on the receiving side.
+  * @param Fs <tt>opus_int32</tt>: Sampling rate of the input signal (in Hz).
+  *                                This must be one of 8000, 12000, 16000,
+  *                                24000, or 48000.
+  * @param channels <tt>int</tt>: Number of channels in the input signal.
+  * @param mapping_family <tt>int</tt>: The mapping family describing the
+  *                                      input channel order:
+  * <dl>
+  * <dt>0</dt><dd>Monophonic or stereophonic Vorbis order; \a channels must
+  * be 1 or 2.</dd>
+  * <dt>1</dt><dd>Vorbis channel order for 1 to 8 channels, including the
+  * common 5.1 (6 channels) and 7.1 (8 channels) surround layouts.</dd>
+  * <dt>2</dt><dd>Ambisonic channels in Ambisonic Channel Number (ACN) order,
+  * optionally followed by two non-diegetic stereo channels. \a channels must
+  * either be a perfect square <code>(order+1)^2</code> or such a square plus
+  * two, and must not exceed 227. The Ambisonic channels are coded as
+  * uncoupled mono streams; when present, the non-diegetic pair is coded as a
+  * single coupled stream placed ahead of them.</dd>
+  * <dt>255</dt><dd>Undefined order; every input channel is coded by its own
+  * uncoupled mono stream.</dd>
+  * </dl>
+  * @param[out] streams <tt>int *</tt>: Receives the total number of streams
+  *                     in the derived layout.
+  * @param[out] coupled_streams <tt>int *</tt>: Receives the number of
+  *                     coupled (stereo) streams in the derived layout.
+  * @param[out] mapping <code>unsigned char[channels]</code>: Receives the
+  *                     channel mapping table of the derived layout.
+  * @param application <tt>int</tt>: The target encoder application.
+  * @param[out] error <tt>int *</tt>: Returns #OPUS_OK on success,
+  * #OPUS_BAD_ARG if \a channels is invalid for \a mapping_family, or
+  * #OPUS_UNIMPLEMENTED if \a mapping_family is not supported.
+  * @returns A newly created encoder on success, or NULL on failure.
+  */
 OPUS_EXPORT OPUS_WARN_UNUSED_RESULT OpusMSEncoder *opus_multistream_surround_encoder_create(
       opus_int32 Fs,
       int channels,
@@ -333,6 +426,35 @@ OPUS_EXPORT int opus_multistream_encoder_init(
       int application
 ) OPUS_ARG_NONNULL(1) OPUS_ARG_NONNULL(6);
 
+/** Initializes a previously allocated multistream encoder state using the
+  * stream layout derived from a channel count and mapping family.
+  * The memory pointed to by \a st must be at least the size returned by
+  * opus_multistream_surround_encoder_get_size() for the same \a channels and
+  * \a mapping_family.
+  * As with opus_multistream_encoder_init(), passing NULL for \a st computes
+  * and returns the required size instead of initializing a state.
+  * @param st <tt>OpusMSEncoder*</tt>: Multistream encoder state to initialize.
+  * @param Fs <tt>opus_int32</tt>: Sampling rate of the input signal (in Hz).
+  *                                This must be one of 8000, 12000, 16000,
+  *                                24000, or 48000.
+  * @param channels <tt>int</tt>: Number of channels in the input signal.
+  * @param mapping_family <tt>int</tt>: Mapping family (0, 1, 2, or 255); see
+  *                                      opus_multistream_surround_encoder_create()
+  *                                      for the layout and validity rules of
+  *                                      each family, including family 2
+  *                                      Ambisonic layouts and the family 1
+  *                                      5.1/7.1 surround layouts.
+  * @param[out] streams <tt>int *</tt>: Receives the total number of streams
+  *                     in the derived layout.
+  * @param[out] coupled_streams <tt>int *</tt>: Receives the number of
+  *                     coupled (stereo) streams in the derived layout.
+  * @param[out] mapping <code>unsigned char[channels]</code>: Receives the
+  *                     channel mapping table of the derived layout.
+  * @param application <tt>int</tt>: The target encoder application.
+  * @returns #OPUS_OK on success, #OPUS_BAD_ARG if \a channels is invalid for
+  *          \a mapping_family, #OPUS_UNIMPLEMENTED if \a mapping_family is
+  *          not supported, or the required size in bytes when \a st is NULL.
+  */
 OPUS_EXPORT int opus_multistream_surround_encoder_init(
       OpusMSEncoder *st,
       opus_int32 Fs,

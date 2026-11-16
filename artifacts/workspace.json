@@ -1,0 +1,17 @@
+{
+  "root": "/home/dev/feedback/uid22502",
+  "B": "/home/dev/feedback/uid22502",
+  "sha": "0145a6248c2171bb6c4e03fb54fe016b5123e37e",
+  "wslDistro": "Ubuntu-26.04",
+  "source": {
+    "owner": "xiph",
+    "repo": "opus",
+    "sha": "0145a6248c2171bb6c4e03fb54fe016b5123e37e"
+  },
+  "fork": {
+    "owner": "Rrr119",
+    "repo": "opus",
+    "cloneUrl": "https://github.com/Rrr119/opus.git"
+  },
+  "at": "2026-11-16T16:29:36.523Z"
+}
